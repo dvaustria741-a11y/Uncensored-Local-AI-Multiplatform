@@ -10,6 +10,7 @@ import '../services/local_api_server_service.dart';
 import '../services/model_manager.dart';
 import '../services/background_optimizer_service.dart';
 import '../services/chat_storage_service.dart';
+import '../services/github_service.dart';
 
 class SettingsScreen extends StatelessWidget {
   /// When true, no Scaffold — just the body content for embedding in tabs.
@@ -533,6 +534,19 @@ class _SettingsBody extends StatelessWidget {
 
               const SizedBox(height: 28),
 
+              // ── GitHub Agent ────────────────────────────────
+              _sectionHeader(context, 'GitHub Agent'),
+              const SizedBox(height: 8),
+              Text(
+                'Let the loaded model read and edit files in a GitHub repo, '
+                'and trigger the APK build workflow, using tool calls.',
+                style: TextStyle(fontSize: 12, color: context.textD),
+              ),
+              const SizedBox(height: 12),
+              const _GithubAgentCard(),
+
+              const SizedBox(height: 28),
+
               // ── Storage ───────────────────────────────────
               _sectionHeader(context, 'Storage'),
               const SizedBox(height: 12),
@@ -1044,3 +1058,275 @@ class _HardwareSettingsCardState extends State<_HardwareSettingsCard> {
   }
 }
 
+
+class _GithubAgentCard extends StatefulWidget {
+  const _GithubAgentCard();
+
+  @override
+  State<_GithubAgentCard> createState() => _GithubAgentCardState();
+}
+
+class _GithubAgentCardState extends State<_GithubAgentCard> {
+  final _tokenCtrl = TextEditingController();
+  bool _obscureToken = true;
+  bool _savingToken = false;
+
+  ChatController get _chat => Get.find<ChatController>();
+  GithubService? get _github {
+    try {
+      return Get.find<GithubService>();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _tokenCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveToken() async {
+    final github = _github;
+    if (github == null || _tokenCtrl.text.trim().isEmpty) return;
+    setState(() => _savingToken = true);
+    try {
+      await github.saveToken(_tokenCtrl.text.trim());
+      _tokenCtrl.clear();
+      Get.snackbar(
+        'Saved',
+        'GitHub token stored securely on this device.',
+        snackPosition: SnackPosition.BOTTOM,
+      );
+    } finally {
+      if (mounted) setState(() => _savingToken = false);
+    }
+  }
+
+  Future<void> _clearToken() async {
+    await _github?.clearToken();
+    Get.snackbar(
+      'Removed',
+      'GitHub token deleted from this device.',
+      snackPosition: SnackPosition.BOTTOM,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final github = _github;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: context.bgPanel,
+        border: Border.all(color: context.border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (github == null)
+            Row(
+              children: [
+                const Icon(Icons.error_outline_rounded, size: 16, color: AppColors.orange),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'GitHub service is not available in this build.',
+                    style: TextStyle(color: context.textM, fontSize: 12),
+                  ),
+                ),
+              ],
+            )
+          else ...[
+            Obx(
+              () => SwitchListTile(
+                title: Text(
+                  'Enable GitHub Agent',
+                  style: TextStyle(color: context.text, fontSize: 14),
+                ),
+                subtitle: Text(
+                  'Model can call read_file / write_file / list_dir / trigger_build.',
+                  style: TextStyle(color: context.textD, fontSize: 12),
+                ),
+                secondary: const Icon(Icons.hub_rounded),
+                value: _chat.githubAgentEnabled.value,
+                onChanged: (v) => _chat.setGithubAgentEnabled(v),
+                activeThumbColor: AppColors.accent,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Obx(
+              () => Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      key: ValueKey('gh-owner-${_chat.githubOwner.value}'),
+                      initialValue: _chat.githubOwner.value,
+                      style: TextStyle(color: context.text, fontSize: 13),
+                      decoration: _inputDecoration(context, 'Owner', 'e.g. dvaustria741-a11y'),
+                      onChanged: (v) => _chat.setGithubOwner(v),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      key: ValueKey('gh-repo-${_chat.githubRepo.value}'),
+                      initialValue: _chat.githubRepo.value,
+                      style: TextStyle(color: context.text, fontSize: 13),
+                      decoration: _inputDecoration(context, 'Repo', 'e.g. my-repo'),
+                      onChanged: (v) => _chat.setGithubRepo(v),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            Obx(
+              () => TextFormField(
+                key: ValueKey('gh-branch-${_chat.githubBranch.value}'),
+                initialValue: _chat.githubBranch.value,
+                style: TextStyle(color: context.text, fontSize: 13),
+                decoration: _inputDecoration(context, 'Default branch', 'main'),
+                onChanged: (v) => _chat.setGithubBranch(v),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Obx(
+              () => Row(
+                children: [
+                  Icon(
+                    github.hasToken.value ? Icons.check_circle_rounded : Icons.key_off_rounded,
+                    size: 16,
+                    color: github.hasToken.value ? AppColors.green : context.textD,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    github.hasToken.value ? 'Token saved on this device' : 'No token saved yet',
+                    style: TextStyle(color: context.textM, fontSize: 12),
+                  ),
+                  const Spacer(),
+                  if (github.hasToken.value)
+                    TextButton(
+                      onPressed: _clearToken,
+                      style: TextButton.styleFrom(foregroundColor: AppColors.red),
+                      child: const Text('Remove', style: TextStyle(fontSize: 12)),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _tokenCtrl,
+                    obscureText: _obscureToken,
+                    style: TextStyle(color: context.text, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Paste a fine-grained GitHub PAT (repo + workflow scope)',
+                      hintStyle: TextStyle(color: context.textD, fontSize: 12),
+                      filled: true,
+                      fillColor: context.bgInput,
+                      isDense: true,
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: context.border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: context.border),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: AppColors.accent),
+                      ),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscureToken ? Icons.visibility_rounded : Icons.visibility_off_rounded,
+                          size: 18,
+                          color: context.textD,
+                        ),
+                        onPressed: () => setState(() => _obscureToken = !_obscureToken),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: _savingToken ? null : _saveToken,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: _savingToken
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Save'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.orange.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.warning_amber_rounded, size: 14, color: AppColors.orange),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'The token is stored in this device\'s secure keystore, never in chat '
+                      'history or the model itself. Use a fine-grained PAT scoped to just this '
+                      'repo with Contents + Actions write access, not a classic all-repo token.',
+                      style: TextStyle(color: context.textM, fontSize: 11, height: 1.4),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  InputDecoration _inputDecoration(BuildContext context, String label, String hint) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      isDense: true,
+      labelStyle: TextStyle(color: context.textM, fontSize: 12),
+      hintStyle: TextStyle(color: context.textD, fontSize: 12),
+      filled: true,
+      fillColor: context.bgInput,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: context.border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: context.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: AppColors.accent),
+      ),
+    );
+  }
+}
