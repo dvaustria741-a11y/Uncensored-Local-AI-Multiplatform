@@ -22,9 +22,9 @@ class AppColors {
   AppColors._();
 
   // ── Common Colors ──────────────────────────────────────────────
-  static const accent    = Color(0xFF6366F1);
-  static const accentDim = Color(0xFF4F46E5);
-  static const accentHi  = Color(0xFF818CF8);
+  static const accent    = Color(0xFF4FB6C4);
+  static const accentDim = Color(0xFF3B95A3);
+  static const accentHi  = Color(0xFF7DD3DC);
   static const green  = Color(0xFF3FB950);
   static const red    = Color(0xFFF85149);
   static const orange = Color(0xFFE3B341);
@@ -62,7 +62,7 @@ class AppColors {
 
   // ── Gradients ────────────────────────────────────────────────
   static const accentGradient = LinearGradient(
-    colors: [accent, Color(0xFF8B5CF6)],
+    colors: [accent, Color(0xFF3B82C4)],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );

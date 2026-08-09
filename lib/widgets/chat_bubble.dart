@@ -8,6 +8,9 @@ import '../models/message_model.dart';
 import '../services/llm_service.dart';
 import '../controllers/chat_controller.dart';
 
+/// Soft/minimal, iOS-native style chat row: filled teal bubble for the
+/// user (right-aligned), plain borderless text for the AI (left-aligned,
+/// avatar only on this side) — spacing does the separating, not panels.
 class ChatBubble extends StatelessWidget {
   final MessageModel message;
   /// If true, this is the last AI message and we show speed info
@@ -20,76 +23,78 @@ class ChatBubble extends StatelessWidget {
     final isUser = message.isUser;
     final isSmall = MediaQuery.of(context).size.width < 600;
     final hPad = isSmall ? 16.0 : 24.0;
+    final maxBubbleWidth = MediaQuery.of(context).size.width * 0.78;
 
-    return Container(
-      width: double.infinity,
-      color: isUser ? Colors.transparent : context.bgMsgAi,
-      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Avatar
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: isUser ? context.textM : AppColors.accent,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              isUser ? Icons.person_rounded : Icons.bolt_rounded,
-              size: 16,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(width: 14),
-
-          // Content
-          Expanded(
-            child: _buildContent(context, isUser),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildContent(BuildContext context, bool isUser) {
     if (isUser) {
       return Padding(
-        padding: const EdgeInsets.only(top: 3),
-        child: Text(
-          message.content,
-          style: TextStyle(
-            fontSize: 15,
-            color: context.text,
-            height: 1.6,
+        padding: EdgeInsets.fromLTRB(hPad, 10, hPad, 10),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.accent,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                message.content,
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: Colors.white,
+                  height: 1.45,
+                ),
+              ),
+            ),
           ),
         ),
       );
     }
 
-    // AI: render markdown
+    // AI: avatar + plain text, no bubble/panel — spacing carries the layout.
+    return Padding(
+      padding: EdgeInsets.fromLTRB(hPad, 14, hPad, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 26,
+            height: 26,
+            decoration: const BoxDecoration(
+              gradient: AppColors.accentGradient,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.auto_awesome_rounded, size: 13, color: Colors.white),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: _buildAiContent(context)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAiContent(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (message.thinking != null && message.thinking!.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 3, bottom: 10),
-            child: _ThinkingSection(
+            padding: const EdgeInsets.only(top: 2, bottom: 10),
+            child: _ThinkingCard(
               message: message,
               // Only the currently-streaming last AI message should show a
-              // live "Thinking…" status; finished messages just show the
-              // static, collapsed trace.
+              // live pulsing status; finished messages show the static card.
               live: showSpeed,
             ),
           ),
         Padding(
-          padding: const EdgeInsets.only(top: 3),
+          padding: const EdgeInsets.only(top: 2),
           child: MarkdownBody(
             data: message.content,
             selectable: true,
             styleSheet: MarkdownStyleSheet(
-              p: TextStyle(fontSize: 15, color: context.text, height: 1.7),
+              p: TextStyle(fontSize: 15.5, color: context.text, height: 1.6),
               h1: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: context.text),
               h2: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: context.text),
               h3: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: context.text),
@@ -103,11 +108,12 @@ class ChatBubble extends StatelessWidget {
               ),
               codeblockDecoration: BoxDecoration(
                 color: const Color(0xFF1E1E2E),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(14),
               ),
               codeblockPadding: const EdgeInsets.all(14),
               blockquoteDecoration: BoxDecoration(
                 color: AppColors.accent.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
                 border: const Border(
                   left: BorderSide(color: AppColors.accent, width: 3),
                 ),
@@ -143,9 +149,9 @@ class ChatBubble extends StatelessWidget {
                       ),
                     );
                   },
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(20),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -159,7 +165,7 @@ class ChatBubble extends StatelessWidget {
 
                 // Speed indicator (on the last AI message)
                 if (showSpeed) ...[
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
                   Obx(() {
                     final llm = Get.find<LlmService>();
                     final speed = llm.isGenerating.value
@@ -187,118 +193,144 @@ class ChatBubble extends StatelessWidget {
   }
 }
 
-/// Collapsible "chain of thought" section for a single AI reply, styled
-/// after Claude's thinking display: a small header row (clock icon while
-/// streaming, checkmark once done) that expands to show the reasoning text.
-class _ThinkingSection extends StatefulWidget {
+/// Soft, rounded "Thinking" card — a teal-tinted panel with a pulsing dot
+/// while streaming and a chevron to expand the full reasoning trace,
+/// mirroring the Nova-style mockup instead of a bare collapsible row.
+class _ThinkingCard extends StatefulWidget {
   final MessageModel message;
   final bool live;
 
-  const _ThinkingSection({required this.message, required this.live});
+  const _ThinkingCard({required this.message, required this.live});
 
   @override
-  State<_ThinkingSection> createState() => _ThinkingSectionState();
+  State<_ThinkingCard> createState() => _ThinkingCardState();
 }
 
-class _ThinkingSectionState extends State<_ThinkingSection> {
+class _ThinkingCardState extends State<_ThinkingCard> {
   bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
-    final header = InkWell(
-      onTap: () => setState(() => _expanded = !_expanded),
-      borderRadius: BorderRadius.circular(6),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-        child: widget.live ? _liveHeaderRow(context) : _staticHeaderRow(context),
-      ),
-    );
+    final tint = AppColors.accent.withOpacity(context.isDark ? 0.12 : 0.08);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        header,
-        if (_expanded)
-          Container(
-            margin: const EdgeInsets.only(top: 4),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: context.isDark
-                  ? Colors.white.withOpacity(0.04)
-                  : Colors.black.withOpacity(0.03),
-              borderRadius: BorderRadius.circular(8),
-              border: Border(
-                left: BorderSide(color: context.border, width: 2),
-              ),
-            ),
-            child: Text(
-              widget.message.thinking ?? '',
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.6,
-                color: context.textD,
-                fontStyle: FontStyle.italic,
-              ),
+    return Container(
+      decoration: BoxDecoration(
+        color: tint,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                widget.live ? _liveHeader(context) : _staticHeader(context),
+                if (_expanded)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text(
+                      widget.message.thinking ?? '',
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.6,
+                        color: context.textM,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-      ],
+        ),
+      ),
     );
   }
 
-  Widget _staticHeaderRow(BuildContext context) {
-    return _headerRow(
-      context,
-      stillThinking: false,
-      label: 'Thought process',
-    );
+  Widget _staticHeader(BuildContext context) {
+    return _headerRow(context, pulsing: false, label: 'Thinking');
   }
 
-  Widget _liveHeaderRow(BuildContext context) {
+  Widget _liveHeader(BuildContext context) {
     return Obx(() {
       final ctrl = Get.find<ChatController>();
       final stillThinking = ctrl.isThinking.value;
       return _headerRow(
         context,
-        stillThinking: stillThinking,
-        label: stillThinking ? 'Thinking…' : 'Thought process',
+        pulsing: stillThinking,
+        label: 'Thinking',
       );
     });
   }
 
   Widget _headerRow(
     BuildContext context, {
-    required bool stillThinking,
+    required bool pulsing,
     required String label,
   }) {
     return Row(
-      mainAxisSize: MainAxisSize.min,
       children: [
-        stillThinking
-            ? SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  color: context.textD,
-                ),
-              )
-            : Icon(Icons.check_circle_outline_rounded, size: 14, color: context.textD),
+        pulsing
+            ? const _PulseDot()
+            : Icon(Icons.auto_awesome_rounded, size: 14, color: AppColors.accent),
         const SizedBox(width: 8),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 13,
-            color: context.textD,
-            fontStyle: FontStyle.italic,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: AppColors.accent,
           ),
         ),
-        const SizedBox(width: 6),
-        Icon(
-          _expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-          size: 18,
-          color: context.textD,
+        const Spacer(),
+        AnimatedRotation(
+          turns: _expanded ? 0.5 : 0,
+          duration: const Duration(milliseconds: 180),
+          child: Icon(Icons.keyboard_arrow_down_rounded, size: 20, color: context.textD),
         ),
       ],
+    );
+  }
+}
+
+/// A small, gently pulsing dot used as the "still generating" indicator in
+/// the Thinking card — softer than a spinner, matches the mockup's dot icon.
+class _PulseDot extends StatefulWidget {
+  const _PulseDot();
+
+  @override
+  State<_PulseDot> createState() => _PulseDotState();
+}
+
+class _PulseDotState extends State<_PulseDot> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween(begin: 0.35, end: 1.0).animate(
+        CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+      ),
+      child: Container(
+        width: 10,
+        height: 10,
+        decoration: const BoxDecoration(
+          color: AppColors.accent,
+          shape: BoxShape.circle,
+        ),
+      ),
     );
   }
 }

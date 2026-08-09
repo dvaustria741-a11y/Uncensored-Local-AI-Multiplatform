@@ -348,45 +348,90 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: context.bg,
-          border: Border(top: BorderSide(color: context.border, width: 0.5)),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.only(bottom: 10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Container(
+            height: 60,
+            decoration: BoxDecoration(
+              color: context.bgInput,
+              borderRadius: BorderRadius.circular(30),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(context.isDark ? 0.25 : 0.06),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                _pillNavItem(
+                  index: 0,
+                  outlineIcon: Icons.chat_outlined,
+                  filledIcon: Icons.chat_rounded,
+                  label: 'Chat',
+                ),
+                _pillNavItem(
+                  index: 1,
+                  outlineIcon: Icons.widgets_outlined,
+                  filledIcon: Icons.widgets_rounded,
+                  label: 'Models',
+                ),
+                _pillNavItem(
+                  index: 2,
+                  outlineIcon: Icons.settings_outlined,
+                  filledIcon: Icons.settings_rounded,
+                  label: 'Settings',
+                ),
+              ],
+            ),
+          ),
         ),
-        child: NavigationBar(
-          selectedIndex: _mobileTabIndex,
-          onDestinationSelected: (i) => setState(() => _mobileTabIndex = i),
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          indicatorColor: AppColors.accent.withOpacity(0.15),
-          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-          height: 64,
-          destinations: [
-            NavigationDestination(
-              icon: Icon(Icons.chat_outlined, color: context.textM),
-              selectedIcon: const Icon(
-                Icons.chat_rounded,
-                color: AppColors.accent,
+      ),
+    );
+  }
+
+  Widget _pillNavItem({
+    required int index,
+    required IconData outlineIcon,
+    required IconData filledIcon,
+    required String label,
+  }) {
+    final selected = _mobileTabIndex == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _mobileTabIndex = index),
+        borderRadius: BorderRadius.circular(30),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          margin: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: selected ? AppColors.accent.withOpacity(0.14) : Colors.transparent,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                selected ? filledIcon : outlineIcon,
+                size: 21,
+                color: selected ? AppColors.accent : context.textD,
               ),
-              label: 'Chat',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.widgets_outlined, color: context.textM),
-              selectedIcon: const Icon(
-                Icons.widgets_rounded,
-                color: AppColors.accent,
+              const SizedBox(height: 3),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  color: selected ? AppColors.accent : context.textD,
+                ),
               ),
-              label: 'Models',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.settings_outlined, color: context.textM),
-              selectedIcon: const Icon(
-                Icons.settings_rounded,
-                color: AppColors.accent,
-              ),
-              label: 'Settings',
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
