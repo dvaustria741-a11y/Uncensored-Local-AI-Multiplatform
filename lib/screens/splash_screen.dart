@@ -10,6 +10,7 @@ import '../services/local_api_server_service.dart';
 import '../services/wakelock_service.dart';
 import '../services/log_service.dart';
 import '../services/background_optimizer_service.dart';
+import '../services/github_service.dart';
 import '../routes/app_routes.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -52,6 +53,10 @@ class _SplashScreenState extends State<SplashScreen> {
       setState(() => _status = 'Setting up background services...');
       log.info('Setting up background services...', source: 'Splash');
       await Get.find<WakelockService>().init();
+
+      setState(() => _status = 'Checking GitHub agent...');
+      log.info('Checking GitHub agent...', source: 'Splash');
+      await Get.find<GithubService>().init();
 
       setState(() => _status = 'Ready!');
       log.info('All services initialized successfully', source: 'Splash');
