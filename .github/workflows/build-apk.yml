@@ -1,9 +1,18 @@
-name: Build APK (Spanish Translation)
+name: Build APK
 
 on:
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'release'
+        type: choice
+        options: [release, debug]
   push:
     branches: [ main, spanish-translation, traduccion-al-espanol ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build:
@@ -28,17 +37,24 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build APK (arm64)
-        run: flutter build apk --release --target-platform android-arm64
+      - name: Determine build mode
+        id: mode
+        run: |
+          mode="${{ github.event.inputs.build_type }}"
+          if [ -z "$mode" ]; then mode="release"; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK (per-ABI, arm64/arm32/x64)
+        run: flutter build apk --${{ steps.mode.outputs.mode }} --split-per-abi
 
       - name: List build outputs
         if: always()
         run: find build -name "*.apk" 2>/dev/null || echo "No APK found"
 
-      - name: Upload APK artifact
+      - name: Upload APK artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: app-arm64-v8a-release-spanish
+          name: app-apks-${{ steps.mode.outputs.mode }}-${{ github.run_number }}
           path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: warn
