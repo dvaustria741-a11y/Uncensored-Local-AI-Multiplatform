@@ -5,10 +5,20 @@ import '../models/chat_model.dart';
 import '../models/message_model.dart';
 import '../services/llm_service.dart';
 import '../services/chat_storage_service.dart';
+import '../services/github_service.dart';
+import '../services/github_tool_executor.dart';
 
 class ChatController extends GetxController {
   final LlmService _llm = Get.find<LlmService>();
   final ChatStorageService _storage = Get.find<ChatStorageService>();
+
+  // GitHub agent — optional. Only wired up if GithubService is registered
+  // (see AppBindings). Kept nullable so the rest of the app works fine
+  // if this feature is ever removed.
+  GithubService? _github;
+  GithubToolExecutor? _toolExecutor;
+
+  static const int _maxToolIterations = 4;
 
   final chats = <ChatModel>[].obs;
   final activeChatId = RxnString();
@@ -16,6 +26,14 @@ class ChatController extends GetxController {
   final streamedResponse = ''.obs;
   final temperature = 0.7.obs;
   final systemPrompt = ''.obs;
+
+  // ── GitHub agent settings (mirrors ChatStorageService for reactive UI) ──
+  final githubAgentEnabled = false.obs;
+  final githubOwner = ''.obs;
+  final githubRepo = ''.obs;
+  final githubBranch = 'main'.obs;
+  final isRunningTool = false.obs;
+  final lastToolStatus = ''.obs;
 
   StreamSubscription<String>? _genSub;
 
@@ -25,6 +43,18 @@ class ChatController extends GetxController {
     _loadChats();
     temperature.value = _storage.defaultTemperature;
     systemPrompt.value = _storage.globalSystemPrompt;
+
+    githubAgentEnabled.value = _storage.githubAgentEnabled;
+    githubOwner.value = _storage.githubOwner;
+    githubRepo.value = _storage.githubRepo;
+    githubBranch.value = _storage.githubBranch;
+
+    try {
+      _github = Get.find<GithubService>();
+      _toolExecutor = GithubToolExecutor(_github!);
+    } catch (_) {
+      // GithubService not registered — GitHub agent tools simply stay off.
+    }
   }
 
   void _loadChats() {
@@ -69,19 +99,22 @@ class ChatController extends GetxController {
     }
   }
 
-  /// Send a user message and stream AI response.
+  bool get _githubAgentActive =>
+      githubAgentEnabled.value && _github != null && _toolExecutor != null;
+
+  /// Send a user message, stream the AI response, and — if the GitHub agent
+  /// is enabled — let the model call GitHub tools and react to their
+  /// results in a short automatic loop before handing control back.
   Future<void> sendMessage(String text, {String? modelFilename}) async {
     if (text.trim().isEmpty) return;
     final chat = activeChat;
     if (chat == null) return;
 
-    // Add user message
     final userMsg = MessageModel(role: MessageRole.user, content: text.trim());
     chat.messages.add(userMsg);
     chat.autoTitle();
     chat.updatedAt = DateTime.now();
 
-    // Lock model to this chat on first message
     if (chat.modelId.isEmpty && modelFilename != null) {
       chat.modelId = modelFilename;
     }
@@ -89,13 +122,76 @@ class ChatController extends GetxController {
     _storage.saveChat(chat);
     chats.refresh();
 
-    // Build message history for LLM
-    final history = chat.messages
-        .where((m) => !m.isSystem)
-        .map((m) => m.toLlamaMessage())
-        .toList();
+    await _runGenerationLoop(chat);
+  }
 
-    // Start generation
+  /// Runs one generation turn, and — while the GitHub agent is active —
+  /// keeps letting the model call tools and see results, up to a small
+  /// iteration cap so a confused small model can't loop forever.
+  Future<void> _runGenerationLoop(ChatModel chat) async {
+    int iterations = 0;
+
+    while (true) {
+      final replyContent = await _generateOneTurn(chat);
+      iterations++;
+
+      if (!_githubAgentActive) return;
+
+      final call = _toolExecutor!.extractToolCall(replyContent);
+      if (call == null) return; // Plain-text reply — nothing more to do.
+
+      if (iterations > _maxToolIterations) {
+        final capMsg = MessageModel(
+          role: MessageRole.system,
+          content:
+              'TOOL ERROR: reached the max of $_maxToolIterations tool calls for this message. '
+              'Stopping automatically — send another message to continue.',
+        );
+        chat.messages.add(capMsg);
+        _storage.saveChat(chat);
+        chats.refresh();
+        return;
+      }
+
+      // Replace the raw JSON in the transcript with a friendly one-liner.
+      final lastMsg = chat.messages.isNotEmpty ? chat.messages.last : null;
+      final toolName = call['tool'];
+      if (lastMsg != null && lastMsg.isAssistant) {
+        lastMsg.content = '🔧 Using tool `$toolName`...';
+      }
+      isRunningTool.value = true;
+      lastToolStatus.value = 'Running $toolName...';
+      _storage.saveChat(chat);
+      chats.refresh();
+
+      final owner = githubOwner.value.isNotEmpty ? githubOwner.value : _storage.githubOwner;
+      final repo = githubRepo.value.isNotEmpty ? githubRepo.value : _storage.githubRepo;
+
+      String resultText;
+      if (owner.isEmpty || repo.isEmpty) {
+        resultText = 'TOOL ERROR: no GitHub owner/repo configured in Settings.';
+      } else {
+        resultText = await _toolExecutor!.execute(call, owner: owner, repo: repo);
+      }
+
+      isRunningTool.value = false;
+      lastToolStatus.value = resultText.split('\n').first;
+
+      final toolMsg = MessageModel(role: MessageRole.system, content: resultText);
+      chat.messages.add(toolMsg);
+      _storage.saveChat(chat);
+      chats.refresh();
+      // Loop again so the model can react to the tool result.
+    }
+  }
+
+  /// Streams a single assistant reply into a new message and returns its
+  /// final (cleaned) text.
+  Future<String> _generateOneTurn(ChatModel chat) async {
+    // Include every message (including GitHub tool-result "system" turns)
+    // so the model actually sees tool output as conversation context.
+    final history = chat.messages.map((m) => m.toLlamaMessage()).toList();
+
     isGenerating.value = true;
     streamedResponse.value = '';
 
@@ -106,16 +202,13 @@ class ChatController extends GetxController {
     try {
       final stream = _llm.generate(
         messages: history,
-        systemPrompt: chat.systemPrompt.isNotEmpty
-            ? chat.systemPrompt
-            : systemPrompt.value,
+        systemPrompt: _effectiveSystemPrompt(chat),
         temperature: temperature.value,
       );
 
       await for (final token in stream) {
         streamedResponse.value += token;
         aiMsg.content = streamedResponse.value;
-        // Throttle UI refreshes
         chats.refresh();
       }
     } catch (e) {
@@ -123,20 +216,41 @@ class ChatController extends GetxController {
         aiMsg.content = '⚠ Error: ${e.toString()}';
       }
     } finally {
-      // Clean up any trailing stop tokens or whitespace
-      aiMsg.content = aiMsg.content
-          .replaceAll(RegExp(
-            r'<\|end\|>|<\|eot_id\|>|<\|endoftext\|>|<\|im_end\|>|<\|im_start\|>'
-            r'|<end_of_turn>|<start_of_turn>|<\|assistant\|>|<\|user\|>|<\|system\|>'
-            r'|<\|pad\|>|</s>|<s>|\[INST\]|\[/INST\]|\[end\]'
-          ), '')
-          .trim();
+      aiMsg.content = _stripControlTokens(aiMsg.content);
       isGenerating.value = false;
       streamedResponse.value = '';
       chat.updatedAt = DateTime.now();
       _storage.saveChat(chat);
       chats.refresh();
     }
+
+    return aiMsg.content;
+  }
+
+  String _effectiveSystemPrompt(ChatModel chat) {
+    final base =
+        chat.systemPrompt.isNotEmpty ? chat.systemPrompt : systemPrompt.value;
+    if (!_githubAgentActive) return base;
+
+    final owner = githubOwner.value;
+    final repo = githubRepo.value;
+    if (owner.isEmpty || repo.isEmpty) return base;
+
+    final toolPrompt = GithubToolExecutor.systemPromptFor(owner: owner, repo: repo);
+    return '$base\n\n$toolPrompt';
+  }
+
+  String _stripControlTokens(String content) {
+    return content
+        .replaceAll(
+          RegExp(
+            r'<\|end\|>|<\|eot_id\|>|<\|endoftext\|>|<\|im_end\|>|<\|im_start\|>'
+            r'|<end_of_turn>|<start_of_turn>|<\|assistant\|>|<\|user\|>|<\|system\|>'
+            r'|<\|pad\|>|</s>|<s>|\[INST\]|\[/INST\]|\[end\]',
+          ),
+          '',
+        )
+        .trim();
   }
 
   /// Stop current generation.
@@ -170,6 +284,30 @@ class ChatController extends GetxController {
   void updateTemperature(double temp) {
     temperature.value = temp;
     _storage.defaultTemperature = temp;
+  }
+
+  // ── GitHub agent settings ────────────────────────────────────
+
+  bool get githubToolsAvailable => _github != null;
+
+  void setGithubAgentEnabled(bool value) {
+    githubAgentEnabled.value = value;
+    _storage.githubAgentEnabled = value;
+  }
+
+  void setGithubOwner(String value) {
+    githubOwner.value = value.trim();
+    _storage.githubOwner = value.trim();
+  }
+
+  void setGithubRepo(String value) {
+    githubRepo.value = value.trim();
+    _storage.githubRepo = value.trim();
+  }
+
+  void setGithubBranch(String value) {
+    githubBranch.value = value.trim().isEmpty ? 'main' : value.trim();
+    _storage.githubBranch = githubBranch.value;
   }
 
   @override
