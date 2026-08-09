@@ -23,6 +23,9 @@ dependencies:
   # ── Networking / Downloads ──────────────────────────────────────
   http: ^1.2.2                     # HTTP requests + model downloading
 
+  # ── GitHub Agent ──────────────────────────────────────────────────
+  flutter_secure_storage: ^9.2.2   # Encrypted storage for the GitHub PAT
+
   # ── File System ─────────────────────────────────────────────────
   path_provider: ^2.1.5            # App documents / downloads dir
   path: ^1.9.1                     # Path string utilities
