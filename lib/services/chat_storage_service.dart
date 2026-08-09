@@ -107,4 +107,30 @@ class ChatStorageService extends GetxService {
       _settingsBox.get('backend_type', defaultValue: 'cpu') as String;
 
   set backendType(String value) => _settingsBox.put('backend_type', value);
+
+  // ── GitHub Agent Settings ──────────────────────────────────
+  // NOTE: the PAT itself is never stored here — it lives in the OS
+  // keystore via flutter_secure_storage (see GithubService). Only
+  // non-secret repo targeting + the on/off toggle live in Hive.
+
+  bool get githubAgentEnabled =>
+      _settingsBox.get('github_agent_enabled', defaultValue: false) as bool;
+
+  set githubAgentEnabled(bool value) =>
+      _settingsBox.put('github_agent_enabled', value);
+
+  String get githubOwner =>
+      _settingsBox.get('github_owner', defaultValue: '') as String;
+
+  set githubOwner(String value) => _settingsBox.put('github_owner', value);
+
+  String get githubRepo =>
+      _settingsBox.get('github_repo', defaultValue: '') as String;
+
+  set githubRepo(String value) => _settingsBox.put('github_repo', value);
+
+  String get githubBranch =>
+      _settingsBox.get('github_branch', defaultValue: 'main') as String;
+
+  set githubBranch(String value) => _settingsBox.put('github_branch', value);
 }
