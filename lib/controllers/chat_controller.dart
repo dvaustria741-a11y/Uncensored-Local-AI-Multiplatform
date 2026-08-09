@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:get/get.dart';
+import 'package:llamadart/llamadart.dart';
 
 import '../models/chat_model.dart';
 import '../models/message_model.dart';
@@ -24,6 +25,8 @@ class ChatController extends GetxController {
   final activeChatId = RxnString();
   final isGenerating = false.obs;
   final streamedResponse = ''.obs;
+  final streamedThinking = ''.obs;
+  final isThinking = false.obs;
   final temperature = 0.7.obs;
   final systemPrompt = ''.obs;
 
@@ -187,38 +190,70 @@ class ChatController extends GetxController {
 
   /// Streams a single assistant reply into a new message and returns its
   /// final (cleaned) text.
+  ///
+  /// Generation goes through llamadart's native chat-template API
+  /// ([LlmService.generateChatCompletionWithThinking]), which applies the
+  /// loaded model's own GGUF chat template and stop tokens. That's what
+  /// keeps turn boundaries correct — a hand-rolled generic prompt format
+  /// doesn't match every model and is what used to let raw template tokens
+  /// (e.g. stray "<|user") leak into the visible reply.
   Future<String> _generateOneTurn(ChatModel chat) async {
     // Include every message (including GitHub tool-result "system" turns)
     // so the model actually sees tool output as conversation context.
-    final history = chat.messages.map((m) => m.toLlamaMessage()).toList();
+    final history = <LlamaChatMessage>[];
+
+    final effectiveSystemPrompt = _effectiveSystemPrompt(chat);
+    if (effectiveSystemPrompt.isNotEmpty) {
+      history.add(
+        LlamaChatMessage.fromText(
+          role: LlamaChatRole.system,
+          text: effectiveSystemPrompt,
+        ),
+      );
+    }
+    history.addAll(chat.messages.map((m) => m.toLlamaChatMessage()));
 
     isGenerating.value = true;
     streamedResponse.value = '';
+    streamedThinking.value = '';
+    isThinking.value = false;
 
     final aiMsg = MessageModel(role: MessageRole.assistant, content: '');
     chat.messages.add(aiMsg);
     chats.refresh();
 
     try {
-      final stream = _llm.generate(
+      final stream = _llm.generateChatCompletionWithThinking(
         messages: history,
-        systemPrompt: _effectiveSystemPrompt(chat),
-        temperature: temperature.value,
+        params: GenerationParams(temp: temperature.value),
       );
 
       await for (final token in stream) {
-        streamedResponse.value += token;
-        aiMsg.content = streamedResponse.value;
-        chats.refresh();
+        if (token.thinking != null) {
+          isThinking.value = true;
+          streamedThinking.value += token.thinking!;
+          aiMsg.thinking = streamedThinking.value;
+          chats.refresh();
+        }
+        if (token.content != null) {
+          isThinking.value = false;
+          streamedResponse.value += token.content!;
+          aiMsg.content = streamedResponse.value;
+          chats.refresh();
+        }
       }
     } catch (e) {
       if (aiMsg.content.isEmpty) {
         aiMsg.content = '⚠ Error: ${e.toString()}';
       }
     } finally {
+      // Safety net: strip any stray control tokens a model might still leak
+      // even through the native template path.
       aiMsg.content = _stripControlTokens(aiMsg.content);
       isGenerating.value = false;
+      isThinking.value = false;
       streamedResponse.value = '';
+      streamedThinking.value = '';
       chat.updatedAt = DateTime.now();
       _storage.saveChat(chat);
       chats.refresh();

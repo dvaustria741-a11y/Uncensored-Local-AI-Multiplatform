@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import '../theme/app_colors.dart';
 import '../models/message_model.dart';
 import '../services/llm_service.dart';
+import '../controllers/chat_controller.dart';
 
 class ChatBubble extends StatelessWidget {
   final MessageModel message;
@@ -71,6 +72,17 @@ class ChatBubble extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (message.thinking != null && message.thinking!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 3, bottom: 10),
+            child: _ThinkingSection(
+              message: message,
+              // Only the currently-streaming last AI message should show a
+              // live "Thinking…" status; finished messages just show the
+              // static, collapsed trace.
+              live: showSpeed,
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.only(top: 3),
           child: MarkdownBody(
@@ -170,6 +182,122 @@ class ChatBubble extends StatelessWidget {
               ],
             ),
           ),
+      ],
+    );
+  }
+}
+
+/// Collapsible "chain of thought" section for a single AI reply, styled
+/// after Claude's thinking display: a small header row (clock icon while
+/// streaming, checkmark once done) that expands to show the reasoning text.
+class _ThinkingSection extends StatefulWidget {
+  final MessageModel message;
+  final bool live;
+
+  const _ThinkingSection({required this.message, required this.live});
+
+  @override
+  State<_ThinkingSection> createState() => _ThinkingSectionState();
+}
+
+class _ThinkingSectionState extends State<_ThinkingSection> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final header = InkWell(
+      onTap: () => setState(() => _expanded = !_expanded),
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+        child: widget.live ? _liveHeaderRow(context) : _staticHeaderRow(context),
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        header,
+        if (_expanded)
+          Container(
+            margin: const EdgeInsets.only(top: 4),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: context.isDark
+                  ? Colors.white.withOpacity(0.04)
+                  : Colors.black.withOpacity(0.03),
+              borderRadius: BorderRadius.circular(8),
+              border: Border(
+                left: BorderSide(color: context.border, width: 2),
+              ),
+            ),
+            child: Text(
+              widget.message.thinking ?? '',
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.6,
+                color: context.textD,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _staticHeaderRow(BuildContext context) {
+    return _headerRow(
+      context,
+      stillThinking: false,
+      label: 'Thought process',
+    );
+  }
+
+  Widget _liveHeaderRow(BuildContext context) {
+    return Obx(() {
+      final ctrl = Get.find<ChatController>();
+      final stillThinking = ctrl.isThinking.value;
+      return _headerRow(
+        context,
+        stillThinking: stillThinking,
+        label: stillThinking ? 'Thinking…' : 'Thought process',
+      );
+    });
+  }
+
+  Widget _headerRow(
+    BuildContext context, {
+    required bool stillThinking,
+    required String label,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        stillThinking
+            ? SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: context.textD,
+                ),
+              )
+            : Icon(Icons.check_circle_outline_rounded, size: 14, color: context.textD),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            color: context.textD,
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Icon(
+          _expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+          size: 18,
+          color: context.textD,
+        ),
       ],
     );
   }

@@ -9,6 +9,14 @@ import 'wakelock_service.dart';
 import 'chat_storage_service.dart';
 import 'log_service.dart';
 
+/// A single streamed piece of a chat completion: either a visible content
+/// token, a "thinking"/reasoning token, or both null-checked by the caller.
+class LlmStreamToken {
+  final String? content;
+  final String? thinking;
+  const LlmStreamToken({this.content, this.thinking});
+}
+
 /// Wraps llamadart's LlamaEngine for model loading, generation, and lifecycle.
 class LlmService extends GetxService {
   LlamaEngine? _engine;
@@ -231,123 +239,37 @@ class LlmService extends GetxService {
     _loadingCancelled = false;
   }
 
-  /// Tokens/patterns the model may emit that should be stripped from output.
-  /// Covers ChatML, Llama, Gemma, Phi, Mistral, and other common formats.
-  static final _stopPatterns = RegExp(
-    r'<\|end\|>'
-    r'|<\|eot_id\|>'
-    r'|<\|endoftext\|>'
-    r'|<\|im_end\|>'
-    r'|<\|im_start\|>'
-    r'|<end_of_turn>'
-    r'|<start_of_turn>'
-    r'|<\|assistant\|>'
-    r'|<\|user\|>'
-    r'|<\|system\|>'
-    r'|<\|pad\|>'
-    r'|</s>'
-    r'|<s>'
-    r'|\[INST\]'
-    r'|\[/INST\]'
-    r'|\[end\]',
-  );
-
-  /// Pattern that signals the model is hallucinating a new user turn — stop immediately.
-  static final _userTurnPattern = RegExp(
-    r'<\|user\|>|<\|im_start\|>\s*user|<start_of_turn>\s*user|\[INST\]',
-  );
-
-  /// Generate a streaming response.
-  /// [messages] is a list of {role, content} maps.
-  /// [systemPrompt] is prepended as a system message.
-  /// Returns a Stream of String tokens.
-  Stream<String> generate({
-    required List<Map<String, String>> messages,
-    String? systemPrompt,
-    double temperature = 0.7,
-  }) async* {
-    if (_engine == null || !isLoaded.value) {
-      throw StateError('No model loaded. Call loadModel() first.');
-    }
-    if (isGenerating.value) {
-      throw StateError('Another generation is already in progress.');
-    }
-
-    isGenerating.value = true;
-    tokensPerSecond.value = 0.0;
-    final stopwatch = Stopwatch()..start();
-    int tokenCount = 0;
-
-    // Buffer to detect multi-token stop sequences
-    String buffer = '';
-
-    try {
-      // Build the full prompt from messages
-      final prompt = _buildPrompt(messages, systemPrompt);
-
-      await for (final token in _engine!.generate(prompt)) {
-        tokenCount++;
-        if (stopwatch.elapsedMilliseconds > 0) {
-          tokensPerSecond.value =
-              tokenCount / (stopwatch.elapsedMilliseconds / 1000);
-        }
-
-        // Accumulate into buffer for stop-pattern detection
-        buffer += token;
-
-        // Check if model is hallucinating a user turn — stop immediately
-        if (_userTurnPattern.hasMatch(buffer)) {
-          final cleaned = buffer
-              .replaceAll(_stopPatterns, '')
-              .replaceAll(_userTurnPattern, '')
-              .trim();
-          if (cleaned.isNotEmpty) {
-            yield cleaned;
-          }
-          break;
-        }
-
-        // Check if buffer contains any stop pattern
-        if (_stopPatterns.hasMatch(buffer)) {
-          // Yield everything before the stop pattern, then stop
-          final cleaned = buffer.replaceAll(_stopPatterns, '').trim();
-          if (cleaned.isNotEmpty) {
-            yield cleaned;
-          }
-          break;
-        }
-
-        // If buffer is getting long enough that we know it's safe, flush it
-        // Keep last 30 chars to detect split stop sequences
-        if (buffer.length > 40) {
-          final safe = buffer.substring(0, buffer.length - 30);
-          buffer = buffer.substring(buffer.length - 30);
-          yield safe;
-        }
-      }
-
-      // Flush any remaining buffer (cleaning all control patterns)
-      if (buffer.isNotEmpty) {
-        final cleaned = buffer
-            .replaceAll(_stopPatterns, '')
-            .replaceAll(_userTurnPattern, '')
-            .trim();
-        if (cleaned.isNotEmpty) {
-          yield cleaned;
-        }
-      }
-    } finally {
-      stopwatch.stop();
-      lastGenerationTokens.value = tokenCount;
-      lastGenerationSpeed.value = tokensPerSecond.value;
-      isGenerating.value = false;
-    }
-  }
-
   /// Generate a chat completion using llamadart's chat-template API.
+  ///
+  /// This drives the model through its own GGUF chat template (llamadart's
+  /// [ChatTemplateEngine]) instead of a hand-rolled prompt string, so turn
+  /// markers always match what the specific loaded model was trained on —
+  /// this is what makes the model reliably stop instead of hallucinating
+  /// and leaking template tokens into the visible reply.
   Stream<String> generateChatCompletion({
     required List<LlamaChatMessage> messages,
     GenerationParams params = const GenerationParams(),
+  }) {
+    return _generateChatStream(
+      messages: messages,
+      params: params,
+    ).where((t) => t.content != null).map((t) => t.content!);
+  }
+
+  /// Same as [generateChatCompletion] but also surfaces the model's
+  /// reasoning/"thinking" trace (when the model + chat template expose one)
+  /// as separate tokens, so the UI can render it in a collapsible section
+  /// the way Claude shows its thinking.
+  Stream<LlmStreamToken> generateChatCompletionWithThinking({
+    required List<LlamaChatMessage> messages,
+    GenerationParams params = const GenerationParams(),
+  }) {
+    return _generateChatStream(messages: messages, params: params);
+  }
+
+  Stream<LlmStreamToken> _generateChatStream({
+    required List<LlamaChatMessage> messages,
+    required GenerationParams params,
   }) async* {
     if (_engine == null || !isLoaded.value) {
       throw StateError('No model loaded. Call loadModel() first.');
@@ -368,15 +290,24 @@ class LlmService extends GetxService {
         toolChoice: ToolChoice.none,
       )) {
         final choice = chunk.choices.isNotEmpty ? chunk.choices.first : null;
-        final content = choice?.delta.content;
-        if (content == null || content.isEmpty) continue;
+        final delta = choice?.delta;
+        final content = delta?.content;
+        final thinking = delta?.thinking;
+        if ((content == null || content.isEmpty) &&
+            (thinking == null || thinking.isEmpty)) {
+          continue;
+        }
 
         tokenCount++;
         if (stopwatch.elapsedMilliseconds > 0) {
           tokensPerSecond.value =
               tokenCount / (stopwatch.elapsedMilliseconds / 1000);
         }
-        yield content;
+        yield LlmStreamToken(
+          content: (content != null && content.isNotEmpty) ? content : null,
+          thinking:
+              (thinking != null && thinking.isNotEmpty) ? thinking : null,
+        );
       }
     } finally {
       stopwatch.stop();
@@ -429,31 +360,6 @@ class LlmService extends GetxService {
       final wakelockService = Get.find<WakelockService>();
       await wakelockService.disable();
     } catch (_) {}
-  }
-
-  /// Build a single prompt string from chat messages.
-  String _buildPrompt(
-    List<Map<String, String>> messages,
-    String? systemPrompt,
-  ) {
-    final buffer = StringBuffer();
-
-    if (systemPrompt != null && systemPrompt.isNotEmpty) {
-      buffer.writeln('<|system|>');
-      buffer.writeln(systemPrompt);
-      buffer.writeln('<|end|>');
-    }
-
-    for (final msg in messages) {
-      final role = msg['role'] ?? 'user';
-      final content = msg['content'] ?? '';
-      buffer.writeln('<|$role|>');
-      buffer.writeln(content);
-      buffer.writeln('<|end|>');
-    }
-
-    buffer.writeln('<|assistant|>');
-    return buffer.toString();
   }
 
   @override
